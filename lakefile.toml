@@ -1,0 +1,13 @@
+name = "Lean4IMAS"
+defaultTargets = ["CoreProfiles", "ProfileTransform", "Certificate"]
+
+[[lean_lib]]
+name = "CoreProfiles"
+roots = ["generated.core_profiles"]
+globs = ["generated.core_profiles"]
+
+[[lean_lib]]
+name = "ProfileTransform"
+
+[[lean_lib]]
+name = "Certificate"
