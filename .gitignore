@@ -3,3 +3,4 @@ __pycache__/
 *.olean
 .lake/
 lake-manifest.json
+/AGENTS.md

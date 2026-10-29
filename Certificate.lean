@@ -47,11 +47,10 @@ structure Certificate (raw : IMAS.«core_profiles/profiles_1d») where
   source_axis : raw.grid.psi_magnetic_axis.bind (fun q => exactFloat q.value) = some psi_magnetic_axis
   source_boundary : raw.grid.psi_boundary.bind (fun q => exactFloat q.value) = some psi_boundary
   source_time : raw.time.bind (fun q => exactFloat q.value) = some time
-  -- The remaining fields are proof obligations: validity, lengths and ordering.
+  -- The remaining fields are proof obligations for this example.
   validity : raw.electrons.temperature_validity = some 0 ∨ raw.electrons.temperature_validity = some 1
-  tor_aligned : rho_pol_norm.length = rho_tor_norm.length
-  temperature_aligned : rho_pol_norm.length = temperature.length
-  psi_aligned : psi.length = rho_pol_norm.length
+  temperature_nonempty : temperature ≠ []
+  psi_nonempty : psi ≠ []
   at_least_two : 2 ≤ rho_pol_norm.length
   pol_increasing : rho_pol_norm.Pairwise (· < ·)
   tor_increasing : rho_tor_norm.Pairwise (· < ·)
@@ -60,27 +59,9 @@ structure Certificate (raw : IMAS.«core_profiles/profiles_1d») where
   nonnegative_temperature : ∀ t ∈ temperature, 0 ≤ t
   nondegenerate_flux : psi_boundary ≠ psi_magnetic_axis
   -- rho_pol_norm² = (psi - psi_axis) / (psi_boundary - psi_axis).
-  -- The separate psi_aligned proof above ensures zip cannot hide extra samples.
+  -- The generated coordinate constraints ensure zip cannot hide extra samples.
   poloidal_normalization : ∀ pair ∈ psi.zip rho_pol_norm,
     0 ≤ pair.2 ∧ pair.2 * pair.2 * (psi_boundary - psi_magnetic_axis) = pair.1 - psi_magnetic_axis
-
-/-- A coordinate-tagged view with one temperature per radial position. -/
-structure Profile (coordinate : Coord) where
-  radius : List Rat
-  temperature : List Rat
-  aligned : radius.length = temperature.length
-
--- Both views use the same certified temperature list; only the radius changes.
--- Angle brackets construct a record, the last argument proves equal lengths.
-def poloidal {raw} (c : Certificate raw) : Profile .pol :=
-  ⟨c.rho_pol_norm, c.temperature, c.temperature_aligned⟩
-
-def toroidal {raw} (c : Certificate raw) : Profile .tor :=
-  ⟨c.rho_tor_norm, c.temperature, c.tor_aligned.symm.trans c.temperature_aligned⟩
-
--- `rfl` proves this by unfolding the two definitions: their values are identical.
-theorem profile_values_preserved {raw} (c : Certificate raw) :
-    (toroidal c).temperature = (poloidal c).temperature := rfl
 
 /-- A segment anchored to samples `index` and `index + 1` of the certified data.
     The temperature proofs bind its interpolation endpoints to those same samples. -/
@@ -121,12 +102,15 @@ def example_data : IMAS.«core_profiles» := {
       psi := #[⟨2⟩, ⟨2.75⟩, ⟨5⟩]
       psi_magnetic_axis := some ⟨2⟩
       psi_boundary := some ⟨5⟩
+      coordinates_valid := by decide +kernel
     }
     electrons := {
       temperature := #[⟨2000⟩, ⟨1500⟩, ⟨500⟩]
       temperature_validity := some 0
     }
+    coordinates_valid := by decide +kernel
   }]
+  coordinates_valid := by decide +kernel
 }
 
 -- Select the first slice and prove that index 0 exists. The certificate below
@@ -151,9 +135,8 @@ def example_certificate : Certificate example_slice where
   source_boundary := by decide +kernel
   source_time := by decide +kernel
   validity := by decide +kernel
-  tor_aligned := by decide +kernel
-  temperature_aligned := by decide +kernel
-  psi_aligned := by decide +kernel
+  temperature_nonempty := by decide +kernel
+  psi_nonempty := by decide +kernel
   at_least_two := by decide +kernel
   pol_increasing := by decide +kernel
   tor_increasing := by decide +kernel
@@ -209,13 +192,13 @@ theorem second_roundtrip (x : Point .pol second_segment.affine.pol) :
     inverse second_segment.affine (forward second_segment.affine x) = x :=
   certificate_roundtrip second_segment x
 
--- Report proof dependencies and display the transformed sample coordinates,
--- unchanged temperatures, and the example query's transformed coordinate.
+-- Report proof dependencies, the supplied toroidal coordinates and temperatures,
+-- and the example query's transformed coordinate.
 #print axioms example_certificate
 #print axioms certificate_roundtrip
 #print axioms certificate_temperature
-#eval (toroidal example_certificate).radius
-#eval (toroidal example_certificate).temperature
+#eval example_certificate.rho_tor_norm
+#eval example_certificate.temperature
 #eval (forward first_segment.affine query).value
 
 end ProfileTransform

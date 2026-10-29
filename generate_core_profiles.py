@@ -26,6 +26,17 @@ structure Matrix (α : Type) where
   size_eq : data.size = rows * cols  -- proof that the flat storage fits the shape
 
 instance : Inhabited (Matrix α) := ⟨⟨0, 0, #[], rfl⟩⟩
+
+-- For a filled array, at least one coordinate must be filled, and every
+-- filled alternative must have the same length as the array's dimension.
+-- https://imas-python.readthedocs.io/en/stable/validation.html#validate-coordinates
+def coordinateSizesMatch (size : Nat) (coordinates : List Nat) : Bool :=
+  coordinates.any (fun n => n != 0) &&
+    coordinates.all (fun n => n == 0 || n == size)
+
+-- The DD ties global_quantities/ion to profiles_1d/ion at the time in
+-- global_quantities/ion_time_slice. IMAS-Python currently skips this
+-- cross-array coordinate lookup (IMAS-4675); it is not enforced here either.
 """
 
 
@@ -36,6 +47,106 @@ def identifier(name: str) -> str:
     if any(char in name for char in "«»\n\r"):
         raise ValueError(f"Cannot quote Lean identifier: {name!r}")
     return f"«{name}»"
+
+
+def coordinate_constraints(nodes: list[tuple[tuple[str, ...], ET.Element]]) -> dict[tuple[str, ...], list[tuple[str, str]]]:
+    """Place each coordinate-size proof at the nearest common parent record."""
+    fields = dict(nodes)
+    checks: dict[tuple[str, ...], list[tuple[str, str]]] = {}
+
+    def path_of(reference: str) -> tuple[str, ...]:
+        return tuple(re.sub(r"\([^)]*\)", "", part) for part in reference.split("/"))
+
+    def array_path(path: tuple[str, ...], parent: tuple[str, ...], prefix: str = "") -> tuple[str, list[tuple[str, str]]]:
+        """Build a Lean field expression, binding any intervening structure arrays."""
+        expression = prefix
+        bindings: list[tuple[str, str]] = []
+        for index in range(len(parent), len(path)):
+            part = path[index]
+            expression = f"{expression}.{part}" if expression else part
+            node = fields[path[:index + 1]]
+            if node.get("units") and node.get("data_type") in {"structure", "struct_array"}:
+                expression += ".value"
+            if index < len(path) - 1 and node.get("data_type") == "struct_array":
+                name = f"item{index}"
+                bindings.append((name, expression))
+                expression = name
+        return expression, bindings
+
+    for path, node in nodes:
+        dtype = node.get("data_type", "")
+        if dtype == "struct_array":
+            reference = node.get("coordinate1")
+            if reference and path_of(reference) == path + ("time",):
+                # For dynamic structure arrays, IMAS uses root time in homogeneous
+                # mode and each element's time in heterogeneous mode.
+                if len(path) != 1:
+                    raise ValueError(f"Unsupported nested time coordinate: {'/'.join(path)}")
+                name = path[0]
+                condition = (
+                    f"({name}.size == 0 || "
+                    f"((ids_properties.homogeneous_time == some 1 && {name}.size == time.size) || "
+                    f"(ids_properties.homogeneous_time == some 0 && "
+                    f"{name}.toList.all (fun item => item.time.isSome))))"
+                )
+                checks.setdefault((), []).append((f"coordinate_{name}_1", condition))
+            elif reference not in (None, "1...N", "profiles_1d(itime)/ion"):
+                raise ValueError(f"Unsupported structure-array coordinate: {'/'.join(path)}: {reference}")
+            continue
+        if not re.fullmatch(r"(?:FLT|INT|STR)_[12]D", dtype):
+            continue
+        rank = int(dtype[-2])
+        for dim in range(1, rank + 1):
+            for key in (f"coordinate{dim}", f"coordinate{dim}_same_as"):
+                reference = node.get(key)
+                if not reference or reference == "1...N":
+                    continue
+                fixed = re.fullmatch(r"1\.\.\.(\d+)", reference)
+                if fixed:
+                    parent = path[:-1]
+                    value, _ = array_path(path, parent)
+                    filled = f"{value}.size != 0" if rank == 1 else f"{value}.data.size != 0"
+                    actual = f"{value}.size" if rank == 1 else f"{value}.{'rows' if dim == 1 else 'cols'}"
+                    condition = f"(!({filled}) || {actual} == {fixed[1]})"
+                    checks.setdefault(parent, []).append((f"coordinate_{path[-1]}_{dim}", condition))
+                    continue
+                target = path_of(reference)
+                if target not in fields:
+                    raise ValueError(f"Unknown coordinate {reference} for {'/'.join(path)}")
+                target_node = fields[target]
+                if target_node.get("data_type") not in {"FLT_1D", "INT_1D", "STR_1D", "FLT_2D", "INT_2D"}:
+                    raise ValueError(f"Unsupported coordinate {reference} for {'/'.join(path)}")
+                alternatives = [target]
+                if not key.endswith("_same_as"):
+                    alternatives += [path_of(x) for x in target_node.get("alternative_coordinate1", "").split(";") if x]
+                for alternative in alternatives:
+                    if alternative not in fields:
+                        raise ValueError(f"Unknown alternative coordinate {'/'.join(alternative)} for {'/'.join(path)}")
+                common = list(path[:-1])
+                for other in alternatives:
+                    while tuple(common) != other[:len(common)]:
+                        common.pop()
+                parent = tuple(common)
+                for other in alternatives:
+                    if any(fields[other[:i]].get("data_type") == "struct_array" for i in range(len(parent) + 1, len(other))):
+                        raise ValueError(f"Coordinate {reference} crosses a structure array for {'/'.join(path)}")
+                value, bindings = array_path(path, parent)
+                filled = f"{value}.size != 0" if rank == 1 else f"{value}.data.size != 0"
+                actual = f"{value}.size" if rank == 1 else f"{value}.{'rows' if dim == 1 else 'cols'}"
+                sizes = []
+                for other in alternatives:
+                    expression, _ = array_path(other, parent)
+                    other_rank = int(fields[other].get("data_type")[-2])
+                    other_dim = dim if key.endswith("_same_as") else 1
+                    sizes.append(f"{expression}.size" if other_rank == 1 else f"{expression}.{'rows' if other_dim == 1 else 'cols'}")
+                condition = f"(!({filled}) || coordinateSizesMatch {actual} [{', '.join(sizes)}])"
+                for name, collection in reversed(bindings):
+                    condition = f"({collection}.toList.all fun {name} => {condition})"
+                field_name = "coordinate_" + "_".join(path[len(parent):]) + f"_{dim}"
+                if key.endswith("_same_as"):
+                    field_name += "_same_as"
+                checks.setdefault(parent, []).append((field_name, condition))
+    return checks
 
 
 def generate(xml: bytes) -> tuple[str, int]:
@@ -54,6 +165,7 @@ def generate(xml: bytes) -> tuple[str, int]:
             walk(child, path + (child.attrib["name"],))
 
     walk(ids)
+    checks = coordinate_constraints(nodes)
     units = {node.attrib["units"] for _, node in nodes if "units" in node.attrib}
 
     def record_name(path: tuple[str, ...]) -> str:
@@ -104,7 +216,23 @@ def generate(xml: bytes) -> tuple[str, int]:
                 raise ValueError(f"Unsupported field name: {name!r}")
             lean_name = identifier(name)
             lines.append(f"  {lean_name} : {field_type(path + (name,), child)} := default")
-        lines.extend(["  deriving Inhabited", ""])
+        constraints = checks.get(path, [])
+        if constraints:
+            lines.append("  -- DD coordinate sizes for populated arrays; see coordinateSizesMatch above.")
+            def combine(items: list[str]) -> str:
+                if len(items) == 1:
+                    return items[0]
+                middle = len(items) // 2
+                return f"({combine(items[:middle])} &&\n     {combine(items[middle:])})"
+            lines.append(f"  coordinates_valid : {combine([condition for _, condition in constraints])} = true")
+            lines.extend(["", f"instance : Inhabited {record_name(path)} := ⟨{{"])
+            for child in element.findall("field"):
+                if child.get("data_type") == "struct_array" and child.get("units") is None:
+                    lines.append(f"  {identifier(child.attrib['name'])} := #[]")
+            lines.append("  coordinates_valid := by decide")
+            lines.extend(["}⟩", ""])
+        else:
+            lines.extend(["  deriving Inhabited", ""])
 
     emit(ids)
     lines.append("end IMAS")

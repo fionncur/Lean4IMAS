@@ -1,5 +1,5 @@
 name = "Lean4IMAS"
-defaultTargets = ["CoreProfiles", "ProfileTransform", "Certificate"]
+defaultTargets = ["CoreProfiles", "ProfileTransform", "Certificate", "CoordinateTests"]
 
 [[lean_lib]]
 name = "CoreProfiles"
@@ -11,3 +11,6 @@ name = "ProfileTransform"
 
 [[lean_lib]]
 name = "Certificate"
+
+[[lean_lib]]
+name = "CoordinateTests"
