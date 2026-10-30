@@ -174,7 +174,7 @@ def generate(xml: bytes, ids_name: str = "core_profiles") -> tuple[str, int]:
              "-- Option means a scalar may be missing; Array and Matrix represent arrays.",
              "-- Defaults make it possible to construct a partial IDS without filling every field.",
              "-- Unit tags retain the source XML's spellings.",
-             "import IMASValidation", "", "namespace IMAS", ""]
+             "import Validation", "", "namespace IMAS", ""]
     if ids_name == "core_profiles":
         lines.extend(["-- IMAS-Python skips global_quantities/ion's time-dependent coordinate",
                       "-- lookup into profiles_1d/ion (IMAS-4675); it is not enforced here.", ""])
@@ -295,7 +295,7 @@ def main() -> None:
         args.output.write_text(lean, encoding="utf-8")
         print(f"Generated {args.output}: {fields} fields", flush=True)
         if args.check:
-            subprocess.run(["lake", "build", "IMASValidation"], check=True)
+            subprocess.run(["lake", "build", "Validation"], check=True)
             subprocess.run(["lake", "env", "lean", str(args.output)], check=True)
             print("Lean type-check passed")
     except (ValueError, OSError, ET.ParseError, subprocess.CalledProcessError) as exc:

@@ -8,6 +8,16 @@ A primary motivation for the IMAS Data Dictionary is to support interoperability
 
 Since IMAS can represent both simulation and experimental data in the same structures, formalization could provide a common foundation for the systematic comparison of simulation and experimental data; for example, through a formally specified and verified forward diagnostic model that maps simulation quantities to experimental quantities.
 
+## Architecture
+
+The project separates the data from the conditions we want it to satisfy:
+
+- **Raw records:** generated Lean structures represent the IDS fields. They can hold incomplete or invalid data without requiring a proof to construct them.
+- **Validation predicates:** generated checks express the supported DD coordinate and time relationships. A predicate is a statement about a record, such as whether its coordinate sizes are valid.
+- **Certified records:** `IMAS.Certified` pairs a record with a proof of a chosen predicate. Other predicates, such as future physical requirements for regridding, can be added without changing the raw records.
+
+[Validation.lean](Validation.lean) defines the shared types and certification mechanism. The transformation example adds its own assumptions to a certified profile slice and applies the mathematical results in [ProfileTransform.lean](ProfileTransform.lean). This keeps DD validation separate from the conditions needed for a particular transformation.
+
 ## `core_profiles` → Lean
 
 The generator can be run as follows:
@@ -18,26 +28,28 @@ python3 generate_core_profiles.py --check
 
 This outputs [generated/core_profiles.lean](generated/core_profiles.lean), a Lean file containing **890 fields** for every node in the `core_profiles` IDS, preserving the hierarchy, field types and unit tags, and including error fields and `ids_properties`. Each record is named directly by its DD path. For example, `core_profiles/profiles_1d/electrons` becomes `IMAS.«core_profiles/profiles_1d/electrons»`. The quotes make the path a single Lean name, while fields retain their original names and use normal dot access.
 
-The records also implement partial *validation* of the data structure, currently restricted to just the [coordinate validation](https://imas-python.readthedocs.io/en/stable/validation.html#validate-coordinates). In IMAS-Python, these (and other relationships!) are checked by the `.validate()` method. This enforces certain constraints on the population of valid records with coordinate arrays and their dependent arrays. For `core_profiles`, DD 4.1.1 and IMAS-Python 2.3.0 we have implemented that:
+The generator also produces separate predicates for partial *validation* of the data structure, currently focused on [coordinate validation](https://imas-python.readthedocs.io/en/stable/validation.html#validate-coordinates). In IMAS-Python, these (and other relationships!) are checked by the `.validate()` method. For `core_profiles`, DD 4.1.1 and IMAS-Python 2.3.0 we have implemented that:
 
 - Coordinate arrays must match populated data arrays in size, including each dimension of a matrix.
 - Alternative coordinates and `coordinate*_same_as` size relationships.
 - Empty dependent arrays don’t require filled coordinates.
 - For dynamic arrays of structures such as `profiles_1d`: homogeneous time uses the root time array; heterogeneous time requires a time in each slice.
+- Matrix storage must have `rows * cols` elements.
 
 We have not yet implemented:
 
 - Checking that `ids_properties/homogeneous_time` is a valid time mode.
 - Rejecting all populated time-dependent fields when the time mode is independent.
+- Checking the time-dependent `global_quantities/ion` relationship to `profiles_1d/ion`; IMAS-Python currently skips this lookup too (IMAS-4675).
 - Lean uses `none` for missing scalars. An importer for IMAS data would need to handle empty float/int sentinels. 
 
 As an example excerpt of a field, the `core_profiles/profiles_1d(itime)/electrons` node looks like:
 
 ```lean
 structure «core_profiles/profiles_1d/electrons» where
-  temperature : Array (Quantity .eV) := default
-  temperature_error_upper : Array (Quantity .eV) := default
-  temperature_error_lower : Array (Quantity .eV) := default
+  temperature : Array (Quantity "eV") := default
+  temperature_error_upper : Array (Quantity "eV") := default
+  temperature_error_lower : Array (Quantity "eV") := default
   temperature_validity : Option Int32 := default
   ...
 ```
@@ -49,8 +61,8 @@ Some conventions for the translation of the data structure to Lean are that:
 - Floating point values use `Float`, integers use `Int32`, text uses `String`.
 - Scalars use `Option`. `none` means missing, `some value` means present.
 - One dimensional arrays use `Array`, two-dimensional arrays use `Matrix` (general N-d arrays not yet implemented).
-- Units are tags with the original DD spelling, such as `.s`, `.Wb` and `.«m^-3»`. 
-- Fields default to empty values (like with IMAS data), so partially filled records are valid.
+- Units are tags with the original DD spelling, such as `"s"`, `"Wb"` and `"m^-3"`.
+- Fields default to empty values (like with IMAS data), so partially filled records can be constructed and can be valid.
 
 Here is an example of assigning data to a record:
 
@@ -60,6 +72,21 @@ def electrons : IMAS.«core_profiles/profiles_1d/electrons» := {
   temperature_validity := some 0
 }
 ```
+
+To certify a profile slice, we supply the raw data and a proof that it satisfies the generated `isValid` predicate:
+
+```lean
+def slice : IMAS.«core_profiles/profiles_1d» := {
+  grid := { rho_pol_norm := #[⟨0⟩, ⟨1⟩] }
+  electrons := electrons
+}
+
+def certifiedSlice : IMAS.Certified IMAS.«core_profiles/profiles_1d»
+    IMAS.«core_profiles/profiles_1d».isValid :=
+  ⟨slice, by decide +kernel⟩
+```
+
+Here `⟨...⟩` pairs the slice with its proof, and `by decide +kernel` asks Lean to check the predicate for this data. [CoordinateTests.lean](CoordinateTests.lean) contains valid and invalid examples. Run `lake build` to check the project and these tests.
 
 ## One formalized transformation of IMAS data
 
@@ -103,6 +130,6 @@ This is a property of the piecewise-affine approximation and is not in general p
 
 [ProfileTransform.lean](ProfileTransform.lean) proves for each segment that the affine interpolation is invertible and preserves the interpolated temperature.
 
-[Certificate.lean](Certificate.lean) appies these results to one synthetic `core_profiles/profiles_1d` record. It (exactly!) converts the `Float` values into rational values, checks the conditions needed by the example and binds two segments to the supplied coordinate and temperature samples.
+[Certificate.lean](Certificate.lean) applies these results to one certified, synthetic `core_profiles/profiles_1d` record. It (exactly!) converts the `Float` values into rational values, checks the conditions needed by the example and binds two segments to the supplied coordinate and temperature samples. This slice certificate does not check the enclosing IDS's root-level time constraints.
 
 The example assumes the supplied poloidal and toroidal coordinates correspond, i.e. does not derive or verify their relationship from an `equilibrium` IDS. A floating-point proof (rather than one using rational arithmetic) is feasible but would require more assumptions about bounds on the inputs and intermediate operations.

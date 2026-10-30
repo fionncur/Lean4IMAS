@@ -16,4 +16,4 @@ name = "Certificate"
 name = "CoordinateTests"
 
 [[lean_lib]]
-name = "IMASValidation"
+name = "Validation"
