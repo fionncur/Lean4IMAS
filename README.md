@@ -64,21 +64,15 @@ Some conventions for the translation of the data structure to Lean are that:
 - Units are tags with the original DD spelling, such as `"s"`, `"Wb"` and `"m^-3"`.
 - Fields default to empty values (like with IMAS data), so partially filled records can be constructed and can be valid.
 
-Here is an example of assigning data to a record:
-
-```lean
-def electrons : IMAS.«core_profiles/profiles_1d/electrons» := {
-  temperature := #[⟨1200.0⟩, ⟨1500.0⟩]
-  temperature_validity := some 0
-}
-```
-
-To certify a profile slice, we supply the raw data and a proof that it satisfies the generated `isValid` predicate:
+Here is an example of assigning data to a profile slice and certifying that it satisfies the generated `isValid` predicate:
 
 ```lean
 def slice : IMAS.«core_profiles/profiles_1d» := {
   grid := { rho_pol_norm := #[⟨0⟩, ⟨1⟩] }
-  electrons := electrons
+  electrons := {
+    temperature := #[⟨1200.0⟩, ⟨1500.0⟩]
+    temperature_validity := some 0
+  }
 }
 
 def certifiedSlice : IMAS.Certified IMAS.«core_profiles/profiles_1d»
