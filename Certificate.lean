@@ -30,7 +30,8 @@ def exactValues {unit : IMAS.Unit} (xs : Array (IMAS.Quantity unit)) : List (Opt
 /-- A certificate is attached to one actual generated profiles_1d record.
     It contains the exact rational values and proofs of the conditions used by
     the segment proofs. Constructing a Certificate requires supplying each proof. -/
-structure Certificate (raw : IMAS.«core_profiles/profiles_1d») where
+structure Certificate (source : IMAS.Certified IMAS.«core_profiles/profiles_1d»
+    IMAS.«core_profiles/profiles_1d».isValid) where
   rho_pol_norm : List Rat
   rho_tor_norm : List Rat
   temperature : List Rat
@@ -40,15 +41,15 @@ structure Certificate (raw : IMAS.«core_profiles/profiles_1d») where
   time : Rat
   -- These equalities tie every rational value back to its stored Float.
   -- Every conversion must return `some`, so NaN and infinity are excluded.
-  source_pol : exactValues raw.grid.rho_pol_norm = rho_pol_norm.map some
-  source_tor : exactValues raw.grid.rho_tor_norm = rho_tor_norm.map some
-  source_temperature : exactValues raw.electrons.temperature = temperature.map some
-  source_psi : exactValues raw.grid.psi = psi.map some
-  source_axis : raw.grid.psi_magnetic_axis.bind (fun q => exactFloat q.value) = some psi_magnetic_axis
-  source_boundary : raw.grid.psi_boundary.bind (fun q => exactFloat q.value) = some psi_boundary
-  source_time : raw.time.bind (fun q => exactFloat q.value) = some time
+  source_pol : exactValues source.val.grid.rho_pol_norm = rho_pol_norm.map some
+  source_tor : exactValues source.val.grid.rho_tor_norm = rho_tor_norm.map some
+  source_temperature : exactValues source.val.electrons.temperature = temperature.map some
+  source_psi : exactValues source.val.grid.psi = psi.map some
+  source_axis : source.val.grid.psi_magnetic_axis.bind (fun q => exactFloat q.value) = some psi_magnetic_axis
+  source_boundary : source.val.grid.psi_boundary.bind (fun q => exactFloat q.value) = some psi_boundary
+  source_time : source.val.time.bind (fun q => exactFloat q.value) = some time
   -- The remaining fields are proof obligations for this example.
-  validity : raw.electrons.temperature_validity = some 0 ∨ raw.electrons.temperature_validity = some 1
+  validity : source.val.electrons.temperature_validity = some 0 ∨ source.val.electrons.temperature_validity = some 1
   temperature_nonempty : temperature ≠ []
   psi_nonempty : psi ≠ []
   at_least_two : 2 ≤ rho_pol_norm.length
@@ -65,7 +66,7 @@ structure Certificate (raw : IMAS.«core_profiles/profiles_1d») where
 
 /-- A segment anchored to samples `index` and `index + 1` of the certified data.
     The temperature proofs bind its interpolation endpoints to those same samples. -/
-structure CertifiedSegment {raw} (c : Certificate raw) where
+structure CertifiedSegment {source} (c : Certificate source) where
   affine : Segment
   index : Nat
   temperature_lo : Rat
@@ -79,11 +80,11 @@ structure CertifiedSegment {raw} (c : Certificate raw) where
 
 -- Apply the general affine proofs to a segment tied to this certificate.
 -- These hold for every point within that segment, not just the example below.
-theorem certificate_roundtrip {raw} {c : Certificate raw} (s : CertifiedSegment c)
+theorem certificate_roundtrip {source} {c : Certificate source} (s : CertifiedSegment c)
     (x : Point .pol s.affine.pol) : inverse s.affine (forward s.affine x) = x :=
   inverse_forward s.affine x
 
-theorem certificate_temperature {raw} {c : Certificate raw} (s : CertifiedSegment c)
+theorem certificate_temperature {source} {c : Certificate source} (s : CertifiedSegment c)
     (x : Point .pol s.affine.pol) :
     blend s.temperature_lo s.temperature_hi (weight s.affine.tor (forward s.affine x).value) =
       blend s.temperature_lo s.temperature_hi (weight s.affine.pol x.value) :=
@@ -102,24 +103,26 @@ def example_data : IMAS.«core_profiles» := {
       psi := #[⟨2⟩, ⟨2.75⟩, ⟨5⟩]
       psi_magnetic_axis := some ⟨2⟩
       psi_boundary := some ⟨5⟩
-      coordinates_valid := by decide +kernel
     }
     electrons := {
       temperature := #[⟨2000⟩, ⟨1500⟩, ⟨500⟩]
       temperature_validity := some 0
     }
-    coordinates_valid := by decide +kernel
   }]
-  coordinates_valid := by decide +kernel
 }
 
 -- Select the first slice and prove that index 0 exists. The certificate below
 -- refers to that slice of example_data.
 abbrev example_slice := example_data.profiles_1d[0]'(by decide +kernel)
 
+-- Certify the generated validity predicate once for this slice.
+def certified_example_slice : IMAS.Certified IMAS.«core_profiles/profiles_1d»
+    IMAS.«core_profiles/profiles_1d».isValid :=
+  ⟨example_slice, by decide +kernel⟩
+
 -- These lists contain the exact rational values of the stored Floats.
 -- The equalities below prove that they match the original data.
-def example_certificate : Certificate example_slice where
+def example_certificate : Certificate certified_example_slice where
   rho_pol_norm := [0, 1/2, 1]
   rho_tor_norm := [0, 1/4, 1]
   temperature := [2000, 1500, 500]

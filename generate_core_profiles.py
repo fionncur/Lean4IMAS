@@ -3,41 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 import re
 import subprocess
 import xml.etree.ElementTree as ET
-
-
-SUPPORT = """-- Quantity pairs a value with its DD unit at the type level. The unit tag
--- prevents, for example, treating a value in eV as one in Wb without conversion.
--- α is the value type; Float is used when no other type is given.
-structure Quantity (unit : Unit) (α : Type := Float) where
-  value : α
-
--- Inhabited supplies a default value when the underlying type has one.
-instance [Inhabited α] : Inhabited (Quantity unit α) := ⟨⟨default⟩⟩
-
--- Rectangular, row-major storage for the DD's two-dimensional arrays.
-structure Matrix (α : Type) where
-  rows : Nat
-  cols : Nat
-  data : Array α
-  size_eq : data.size = rows * cols  -- proof that the flat storage fits the shape
-
-instance : Inhabited (Matrix α) := ⟨⟨0, 0, #[], rfl⟩⟩
-
--- For a filled array, at least one coordinate must be filled, and every
--- filled alternative must have the same length as the array's dimension.
--- https://imas-python.readthedocs.io/en/stable/validation.html#validate-coordinates
-def coordinateSizesMatch (size : Nat) (coordinates : List Nat) : Bool :=
-  coordinates.any (fun n => n != 0) &&
-    coordinates.all (fun n => n == 0 || n == size)
-
--- The DD ties global_quantities/ion to profiles_1d/ion at the time in
--- global_quantities/ion_time_slice. IMAS-Python currently skips this
--- cross-array coordinate lookup (IMAS-4675); it is not enforced here either.
-"""
 
 
 def identifier(name: str) -> str:
@@ -49,15 +19,22 @@ def identifier(name: str) -> str:
     return f"«{name}»"
 
 
-def coordinate_constraints(nodes: list[tuple[tuple[str, ...], ET.Element]]) -> dict[tuple[str, ...], list[tuple[str, str]]]:
-    """Place each coordinate-size proof at the nearest common parent record."""
+def coordinate_constraints(nodes: list[tuple[tuple[str, ...], ET.Element]], ids_name: str) -> tuple[
+    dict[tuple[str, ...], list[tuple[str, str]]],
+    dict[tuple[str, ...], dict[tuple, list[str]]],
+]:
+    """Place each coordinate-size check at the nearest common parent record."""
     fields = dict(nodes)
     checks: dict[tuple[str, ...], list[tuple[str, str]]] = {}
+    # Group dimensions only when they have the same coordinates and are reached
+    # through the same structure arrays. Sizes can be grouped even when element
+    # types or units differ.
+    groups: dict[tuple[str, ...], dict[tuple, list[str]]] = {}
 
     def path_of(reference: str) -> tuple[str, ...]:
         return tuple(re.sub(r"\([^)]*\)", "", part) for part in reference.split("/"))
 
-    def array_path(path: tuple[str, ...], parent: tuple[str, ...], prefix: str = "") -> tuple[str, list[tuple[str, str]]]:
+    def array_path(path: tuple[str, ...], parent: tuple[str, ...], prefix: str = "data") -> tuple[str, list[tuple[str, str]]]:
         """Build a Lean field expression, binding any intervening structure arrays."""
         expression = prefix
         bindings: list[tuple[str, str]] = []
@@ -84,13 +61,16 @@ def coordinate_constraints(nodes: list[tuple[tuple[str, ...], ET.Element]]) -> d
                     raise ValueError(f"Unsupported nested time coordinate: {'/'.join(path)}")
                 name = path[0]
                 condition = (
-                    f"({name}.size == 0 || "
-                    f"((ids_properties.homogeneous_time == some 1 && {name}.size == time.size) || "
-                    f"(ids_properties.homogeneous_time == some 0 && "
-                    f"{name}.toList.all (fun item => item.time.isSome))))"
+                    f"(data.{name}.size == 0 || "
+                    f"((data.ids_properties.homogeneous_time == some 1 && data.{name}.size == data.time.size) || "
+                    f"(data.ids_properties.homogeneous_time == some 0 && "
+                    f"data.{name}.toList.all (fun item => item.time.isSome))))"
                 )
                 checks.setdefault((), []).append((f"coordinate_{name}_1", condition))
-            elif reference not in (None, "1...N", "profiles_1d(itime)/ion"):
+            elif reference == "profiles_1d(itime)/ion" and ids_name == "core_profiles" and path == ("global_quantities", "ion"):
+                # IMAS-Python skips this time-dependent cross-array lookup (IMAS-4675).
+                continue
+            elif reference not in (None, "1...N"):
                 raise ValueError(f"Unsupported structure-array coordinate: {'/'.join(path)}: {reference}")
             continue
         if not re.fullmatch(r"(?:FLT|INT|STR)_[12]D", dtype):
@@ -105,9 +85,9 @@ def coordinate_constraints(nodes: list[tuple[tuple[str, ...], ET.Element]]) -> d
                 if fixed:
                     parent = path[:-1]
                     value, _ = array_path(path, parent)
-                    filled = f"{value}.size != 0" if rank == 1 else f"{value}.data.size != 0"
+                    empty = f"{value}.size == 0" if rank == 1 else f"{value}.data.size == 0"
                     actual = f"{value}.size" if rank == 1 else f"{value}.{'rows' if dim == 1 else 'cols'}"
-                    condition = f"(!({filled}) || {actual} == {fixed[1]})"
+                    condition = f"({empty} || {actual} == {fixed[1]})"
                     checks.setdefault(parent, []).append((f"coordinate_{path[-1]}_{dim}", condition))
                     continue
                 target = path_of(reference)
@@ -131,7 +111,6 @@ def coordinate_constraints(nodes: list[tuple[tuple[str, ...], ET.Element]]) -> d
                     if any(fields[other[:i]].get("data_type") == "struct_array" for i in range(len(parent) + 1, len(other))):
                         raise ValueError(f"Coordinate {reference} crosses a structure array for {'/'.join(path)}")
                 value, bindings = array_path(path, parent)
-                filled = f"{value}.size != 0" if rank == 1 else f"{value}.data.size != 0"
                 actual = f"{value}.size" if rank == 1 else f"{value}.{'rows' if dim == 1 else 'cols'}"
                 sizes = []
                 for other in alternatives:
@@ -139,23 +118,19 @@ def coordinate_constraints(nodes: list[tuple[tuple[str, ...], ET.Element]]) -> d
                     other_rank = int(fields[other].get("data_type")[-2])
                     other_dim = dim if key.endswith("_same_as") else 1
                     sizes.append(f"{expression}.size" if other_rank == 1 else f"{expression}.{'rows' if other_dim == 1 else 'cols'}")
-                condition = f"(!({filled}) || coordinateSizesMatch {actual} [{', '.join(sizes)}])"
-                for name, collection in reversed(bindings):
-                    condition = f"({collection}.toList.all fun {name} => {condition})"
-                field_name = "coordinate_" + "_".join(path[len(parent):]) + f"_{dim}"
-                if key.endswith("_same_as"):
-                    field_name += "_same_as"
-                checks.setdefault(parent, []).append((field_name, condition))
-    return checks
+                group = (tuple(bindings), tuple(sizes), rank)
+                entry = actual if rank == 1 else f"({value}.data.size, {actual})"
+                groups.setdefault(parent, {}).setdefault(group, []).append(entry)
+    return checks, groups
 
 
-def generate(xml: bytes) -> tuple[str, int]:
+def generate(xml: bytes, ids_name: str = "core_profiles") -> tuple[str, int]:
     root = ET.fromstring(xml)
     if root.tag != "IDSs":
         raise ValueError("Expected expanded IDSDef.xml, not source XSD files")
-    ids = root.find("IDS[@name='core_profiles']")
+    ids = next((element for element in root.findall("IDS") if element.get("name") == ids_name), None)
     if ids is None:
-        raise ValueError("XML has no core_profiles IDS")
+        raise ValueError(f"XML has no {ids_name} IDS")
 
     nodes: list[tuple[tuple[str, ...], ET.Element]] = []
 
@@ -165,11 +140,10 @@ def generate(xml: bytes) -> tuple[str, int]:
             walk(child, path + (child.attrib["name"],))
 
     walk(ids)
-    checks = coordinate_constraints(nodes)
-    units = {node.attrib["units"] for _, node in nodes if "units" in node.attrib}
+    checks, groups = coordinate_constraints(nodes, ids_name)
 
     def record_name(path: tuple[str, ...]) -> str:
-        # A slash-separated DD path is one Lean identifier, not a namespace.
+        # A slash-separated DD path is one Lean identifier.
         return f"«{'/'.join((ids.attrib['name'], *path))}»"
 
     def record_type(path: tuple[str, ...]) -> str:
@@ -177,9 +151,9 @@ def generate(xml: bytes) -> tuple[str, int]:
 
     def quantity(payload: str, unit: str) -> str:
         if payload == "Float":
-            return f"Quantity .{identifier(unit)}"
+            return f"Quantity {json.dumps(unit, ensure_ascii=False)}"
         argument = f"({payload})" if " " in payload else payload
-        return f"Quantity .{identifier(unit)} {argument}"
+        return f"Quantity {json.dumps(unit, ensure_ascii=False)} {argument}"
 
     def field_type(path: tuple[str, ...], node: ET.Element) -> str:
         dtype, unit = node.attrib["data_type"], node.get("units")
@@ -188,22 +162,27 @@ def generate(xml: bytes) -> tuple[str, int]:
             return quantity(payload, unit) if unit is not None else payload
         match = re.fullmatch(r"(FLT|INT|STR)_([012])D", dtype)
         if not match or (match[1] == "STR" and match[2] == "2"):
-            raise ValueError(f"core_profiles/{'/'.join(path)}: unsupported type {dtype}")
+            raise ValueError(f"{ids_name}/{'/'.join(path)}: unsupported type {dtype}")
         scalar = {"FLT": "Float", "INT": "Int32", "STR": "String"}[match[1]]
         if unit is not None:
             scalar = quantity(scalar, unit)
         container = ("Option", "Array", "Matrix")[int(match[2])]
         return f"{container} ({scalar})" if " " in scalar else f"{container} {scalar}"
 
-    lines = ["-- Generated from IMAS DD core_profiles. Regenerate rather than editing.",
+    lines = [f"-- Generated from IMAS DD {ids_name}. Regenerate rather than editing.",
              "-- Each record is named by its DD path; «...» makes the path one Lean name.",
              "-- Option means a scalar may be missing; Array and Matrix represent arrays.",
              "-- Defaults make it possible to construct a partial IDS without filling every field.",
-             "-- The source XML's unit spellings are retained as tags; «...» is Lean quoting.",
-             "import Std", "", "namespace IMAS", "", "inductive Unit where"]
-    for unit in sorted(units):
-        lines.append(f"  | {identifier(unit)}")
-    lines.extend(["  deriving DecidableEq", "", SUPPORT.rstrip(), ""])
+             "-- Unit tags retain the source XML's spellings.",
+             "import IMASValidation", "", "namespace IMAS", ""]
+    if ids_name == "core_profiles":
+        lines.extend(["-- IMAS-Python skips global_quantities/ion's time-dependent coordinate",
+                      "-- lookup into profiles_1d/ion (IMAS-4675); it is not enforced here.", ""])
+
+    def combine(items: list[str]) -> str:
+        # Lean's && already associates; parentheses around a balanced tree make
+        # generated checks much harder to read.
+        return " &&\n  ".join(items) if items else "true"
 
     def emit(element: ET.Element, path: tuple[str, ...] = ()) -> None:
         for child in element.findall("field"):
@@ -214,27 +193,82 @@ def generate(xml: bytes) -> tuple[str, int]:
             name = child.attrib["name"]
             if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
                 raise ValueError(f"Unsupported field name: {name!r}")
-            lean_name = identifier(name)
-            lines.append(f"  {lean_name} : {field_type(path + (name,), child)} := default")
-        constraints = checks.get(path, [])
-        if constraints:
-            lines.append("  -- DD coordinate sizes for populated arrays; see coordinateSizesMatch above.")
-            def combine(items: list[str]) -> str:
-                if len(items) == 1:
-                    return items[0]
-                middle = len(items) // 2
-                return f"({combine(items[:middle])} &&\n     {combine(items[middle:])})"
-            lines.append(f"  coordinates_valid : {combine([condition for _, condition in constraints])} = true")
-            lines.extend(["", f"instance : Inhabited {record_name(path)} := ⟨{{"])
-            for child in element.findall("field"):
-                if child.get("data_type") == "struct_array" and child.get("units") is None:
-                    lines.append(f"  {identifier(child.attrib['name'])} := #[]")
-            lines.append("  coordinates_valid := by decide")
-            lines.extend(["}⟩", ""])
-        else:
-            lines.extend(["  deriving Inhabited", ""])
+            lines.append(f"  {identifier(name)} : {field_type(path + (name,), child)} := default")
+        lines.extend(["  deriving Inhabited", ""])
 
     emit(ids)
+
+    # Validate children recursively: a check placed on one record must also be
+    # enforced when that record appears anywhere within an enclosing IDS.
+    needed: dict[tuple[str, ...], dict[str, bool]] = {}
+
+    def emit_validation(element: ET.Element, path: tuple[str, ...] = ()) -> None:
+        children = element.findall("field")
+        for child in children:
+            if child.get("data_type") in {"structure", "struct_array"}:
+                emit_validation(child, path + (child.attrib["name"],))
+        for kind in ("coordinates", "storage"):
+            conditions = [condition for _, condition in checks.get(path, [])] if kind == "coordinates" else []
+            coordinate_lists: dict[tuple[str, ...], str] = {}
+            if kind == "coordinates":
+                # Share each coordinate list across fields and structure arrays.
+                for (bindings, sizes, rank), lengths in groups.get(path, {}).items():
+                    if sizes not in coordinate_lists:
+                        coordinate_lists[sizes] = f"coordinates{len(coordinate_lists) + 1}"
+                    coordinates = coordinate_lists[sizes]
+                    if rank == 1 and len(lengths) == 1:
+                        condition = f"({lengths[0]} == 0 || coordinateSizesMatch {lengths[0]} {coordinates})"
+                    else:
+                        fields_list = ",\n    ".join(lengths)
+                        argument = "size" if rank == 1 else "(stored, size)"
+                        empty = "size == 0" if rank == 1 else "stored == 0"
+                        condition = (f"([{fields_list}].all fun {argument} =>\n"
+                                     f"    {empty} || coordinateSizesMatch size {coordinates})")
+                    for binding, collection in reversed(bindings):
+                        condition = f"({collection}.toList.all fun {binding} =>\n    {condition})"
+                    conditions.append(condition)
+            for child in children:
+                name = identifier(child.attrib["name"])
+                dtype = child.get("data_type", "")
+                child_path = path + (child.attrib["name"],)
+                value = f"data.{name}"
+                if dtype in {"structure", "struct_array"}:
+                    if not needed[child_path][kind]:
+                        continue
+                    if child.get("units") is not None:
+                        value += ".value"
+                    fn = f"{record_name(child_path)}.{kind}ValidBool"
+                    conditions.append(f"{value}.toList.all {fn}" if dtype == "struct_array" else f"{fn} {value}")
+                elif kind == "storage" and re.fullmatch(r"(?:FLT|INT|STR)_2D", dtype):
+                    conditions.append(f"{value}.storageValid")
+            needed.setdefault(path, {})[kind] = bool(conditions)
+            if conditions:
+                name = record_name(path)
+                lines.append(f"def {name}.{kind}ValidBool (data : {name}) : Bool :=")
+                if kind == "coordinates" and any(rank == 2 for _, _, rank in groups.get(path, {})):
+                    lines.append("  -- Matrix pairs contain storage length and the dimension being checked.")
+                for sizes, variable in coordinate_lists.items():
+                    if len(sizes) == 1:
+                        lines.append(f"  let {variable} := [{sizes[0]}]")
+                    else:
+                        items = ",\n    ".join(sizes)
+                        lines.append(f"  let {variable} := [{items}]")
+                lines.extend([f"  {combine(conditions)}", ""])
+        name = record_name(path)
+        for kind in ("coordinates", "storage"):
+            if needed[path][kind]:
+                lines.extend([f"def {name}.{kind}Valid (data : {name}) : Prop :=",
+                              f"  {name}.{kind}ValidBool data = true", "",
+                              f"instance (data : {name}) : Decidable ({name}.{kind}Valid data) :=",
+                              f"  inferInstanceAs (Decidable ({name}.{kind}ValidBool data = true))", ""])
+        if needed[path]["coordinates"] or needed[path]["storage"]:
+            props = [f"{name}.{kind}Valid data" for kind in ("coordinates", "storage") if needed[path][kind]]
+            lines.extend([f"def {name}.isValid (data : {name}) : Prop :=",
+                          f"  {' ∧ '.join(props)}", "",
+                          f"instance (data : {name}) : Decidable ({name}.isValid data) := by",
+                          f"  unfold {name}.isValid", "  infer_instance", ""])
+
+    emit_validation(ids)
     lines.append("end IMAS")
     return "\n".join(lines) + "\n", len(nodes) - 1
 
@@ -244,7 +278,8 @@ def main() -> None:
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--dd-version", default=None, help="Installed DD version (default: 4.1.1)")
     source.add_argument("--xml", type=Path, help="Expanded IDSDef.xml")
-    parser.add_argument("--output", type=Path, default=Path("generated/core_profiles.lean"))
+    parser.add_argument("--ids", default="core_profiles", help="IDS name (default: core_profiles)")
+    parser.add_argument("--output", type=Path, help="Output path (default: generated/<IDS>.lean)")
     parser.add_argument("--check", action="store_true", help="Also type-check the generated file with Lean")
     args = parser.parse_args()
     try:
@@ -253,12 +288,15 @@ def main() -> None:
         else:
             from imas.dd_zip import get_dd_xml
             xml = get_dd_xml(args.dd_version or "4.1.1")
-        lean, fields = generate(xml)
+        lean, fields = generate(xml, args.ids)
+        if args.output is None:
+            args.output = Path("generated") / f"{args.ids}.lean"
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(lean, encoding="utf-8")
         print(f"Generated {args.output}: {fields} fields", flush=True)
         if args.check:
-            subprocess.run(["lean", str(args.output)], check=True)
+            subprocess.run(["lake", "build", "IMASValidation"], check=True)
+            subprocess.run(["lake", "env", "lean", str(args.output)], check=True)
             print("Lean type-check passed")
     except (ValueError, OSError, ET.ParseError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"{exc}\n")
