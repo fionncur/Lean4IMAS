@@ -4,3 +4,4 @@ __pycache__/
 .lake/
 lake-manifest.json
 /AGENTS.md
+/.venv/

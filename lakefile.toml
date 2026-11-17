@@ -22,6 +22,9 @@ name = "Validation"
 name = "ExactFloat"
 
 [[lean_lib]]
+name = "RegridSpec"
+
+[[lean_lib]]
 name = "RegridCheck"
 
 [[lean_exe]]
