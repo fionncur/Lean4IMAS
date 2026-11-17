@@ -1,4 +1,5 @@
 import generated.core_profiles
+import ExactFloat
 import ProfileTransform
 
 /- The source data uses the generated (generated/core_profiles.lean) Float records.
@@ -8,24 +9,6 @@ import ProfileTransform
    feasible, but would just require results about equality to some bound ≤ ε, which
    is not material to this proof of concept. -/
 namespace ProfileTransform
-
--- Interpret the binary Float as an exact rational number for the proofs below.
--- `some` contains the result; `none` rejects infinity and NaN. Both signed
--- zeroes represent rational 0.
-def exactFloat (x : Float) : Option Rat :=
-  match x.toModel.unpack with
-  | .zero _ => some 0
-  | .finite sign mantissa exponent _ =>
-      let signed : Rat := match sign with
-        | .positive => mantissa
-        | .negative => -(mantissa : Rat)
-      some (if exponent ≥ 0 then signed * (2 ^ exponent.toNat : Nat)
-        else signed / (2 ^ (-exponent).toNat : Nat))
-  | _ => none
-
--- Apply exactFloat to each element of a unit-tagged IDS array in order.
-def exactValues {unit : IMAS.Unit} (xs : Array (IMAS.Quantity unit)) : List (Option Rat) :=
-  xs.toList.map (fun q => exactFloat q.value)
 
 /-- A certificate is attached to one actual generated profiles_1d record.
     It contains the exact rational values and proofs of the conditions used by

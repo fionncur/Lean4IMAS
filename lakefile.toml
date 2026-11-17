@@ -1,5 +1,5 @@
 name = "Lean4IMAS"
-defaultTargets = ["CoreProfiles", "ProfileTransform", "Certificate", "CoordinateTests"]
+defaultTargets = ["CoreProfiles", "ProfileTransform", "Certificate", "CoordinateTests", "lean4imas-regrid"]
 
 [[lean_lib]]
 name = "CoreProfiles"
@@ -17,3 +17,13 @@ name = "CoordinateTests"
 
 [[lean_lib]]
 name = "Validation"
+
+[[lean_lib]]
+name = "ExactFloat"
+
+[[lean_lib]]
+name = "RegridCheck"
+
+[[lean_exe]]
+name = "lean4imas-regrid"
+root = "RegridMain"
