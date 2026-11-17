@@ -3,7 +3,7 @@
 -- Option means a scalar may be missing; Array and Matrix represent arrays.
 -- Defaults make it possible to construct a partial IDS without filling every field.
 -- Unit tags retain the source XML's spellings.
-import Validation
+import Lean4IMAS.Validation
 
 namespace IMAS
 

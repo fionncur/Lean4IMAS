@@ -1,6 +1,6 @@
-import generated.core_profiles
-import ExactFloat
-import ProfileTransform
+import Lean4IMAS.Generated.core_profiles
+import Lean4IMAS.ExactFloat
+import Lean4IMAS.Transformations.ProfileTransform
 
 /- Specification of the electron-temperature regridding check.
    Start with RegridsWithinTolerance, then read the definitions it uses.

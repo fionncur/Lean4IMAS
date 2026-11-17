@@ -1,4 +1,4 @@
-import generated.core_profiles
+import Lean4IMAS.Generated.core_profiles
 
 namespace CoordinateTests
 

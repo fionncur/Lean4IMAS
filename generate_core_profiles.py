@@ -174,7 +174,7 @@ def generate(xml: bytes, ids_name: str = "core_profiles") -> tuple[str, int]:
              "-- Option means a scalar may be missing; Array and Matrix represent arrays.",
              "-- Defaults make it possible to construct a partial IDS without filling every field.",
              "-- Unit tags retain the source XML's spellings.",
-             "import Validation", "", "namespace IMAS", ""]
+             "import Lean4IMAS.Validation", "", "namespace IMAS", ""]
     if ids_name == "core_profiles":
         lines.extend(["-- IMAS-Python skips global_quantities/ion's time-dependent coordinate",
                       "-- lookup into profiles_1d/ion (IMAS-4675); it is not enforced here.", ""])
@@ -279,7 +279,7 @@ def main() -> None:
     source.add_argument("--dd-version", default=None, help="Installed DD version (default: 4.1.1)")
     source.add_argument("--xml", type=Path, help="Expanded IDSDef.xml")
     parser.add_argument("--ids", default="core_profiles", help="IDS name (default: core_profiles)")
-    parser.add_argument("--output", type=Path, help="Output path (default: generated/<IDS>.lean)")
+    parser.add_argument("--output", type=Path, help="Output path (default: Lean4IMAS/Generated/<IDS>.lean)")
     parser.add_argument("--check", action="store_true", help="Also type-check the generated file with Lean")
     args = parser.parse_args()
     try:
@@ -290,7 +290,7 @@ def main() -> None:
             xml = get_dd_xml(args.dd_version or "4.1.1")
         lean, fields = generate(xml, args.ids)
         if args.output is None:
-            args.output = Path("generated") / f"{args.ids}.lean"
+            args.output = Path("Lean4IMAS") / "Generated" / f"{args.ids}.lean"
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(lean, encoding="utf-8")
         print(f"Generated {args.output}: {fields} fields", flush=True)

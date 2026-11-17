@@ -1,4 +1,4 @@
-import RegridSpec
+import Lean4IMAS.Checks.RegridSpec
 
 namespace RegridCheck
 

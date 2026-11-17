@@ -1,8 +1,8 @@
-import generated.core_profiles
-import ExactFloat
-import ProfileTransform
+import Lean4IMAS.Generated.core_profiles
+import Lean4IMAS.ExactFloat
+import Lean4IMAS.Transformations.ProfileTransform
 
-/- The source data uses the generated (generated/core_profiles.lean) Float records.
+/- The source data uses the generated (Lean4IMAS/Generated/core_profiles.lean) Float records.
    The certificate interprets their values (exactly) as rationals, then uses the
    results from ProfileTransform.lean. So this formalization does not correspond to any
    "actual" implemented transformation of IMAS data. Floating point implementation is

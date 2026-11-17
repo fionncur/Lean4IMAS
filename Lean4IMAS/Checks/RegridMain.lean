@@ -1,5 +1,5 @@
 import Lean
-import RegridCheck
+import Lean4IMAS.Checks.RegridCheck
 
 open Lean
 
