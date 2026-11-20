@@ -1,45 +1,9 @@
 name = "Lean4IMAS"
-defaultTargets = ["CoreProfiles", "ProfileTransform", "Certificate", "CoordinateTests", "lean4imas-regrid"]
+defaultTargets = ["Lean4IMAS", "lean4imas-regrid"]
 
 [[lean_lib]]
-name = "CoreProfiles"
-roots = ["Lean4IMAS.Generated.core_profiles"]
-globs = ["Lean4IMAS.Generated.core_profiles"]
-
-[[lean_lib]]
-name = "ProfileTransform"
-roots = ["Lean4IMAS.Transformations.ProfileTransform"]
-globs = ["Lean4IMAS.Transformations.ProfileTransform"]
-
-[[lean_lib]]
-name = "Certificate"
-roots = ["Lean4IMAS.Transformations.Certificate"]
-globs = ["Lean4IMAS.Transformations.Certificate"]
-
-[[lean_lib]]
-name = "CoordinateTests"
-roots = ["Lean4IMAS.CoordinateTests"]
-globs = ["Lean4IMAS.CoordinateTests"]
-
-[[lean_lib]]
-name = "Validation"
-roots = ["Lean4IMAS.Validation"]
-globs = ["Lean4IMAS.Validation"]
-
-[[lean_lib]]
-name = "ExactFloat"
-roots = ["Lean4IMAS.ExactFloat"]
-globs = ["Lean4IMAS.ExactFloat"]
-
-[[lean_lib]]
-name = "RegridSpec"
-roots = ["Lean4IMAS.Checks.RegridSpec"]
-globs = ["Lean4IMAS.Checks.RegridSpec"]
-
-[[lean_lib]]
-name = "RegridCheck"
-roots = ["Lean4IMAS.Checks.RegridCheck"]
-globs = ["Lean4IMAS.Checks.RegridCheck"]
+name = "Lean4IMAS"
+globs = ["Lean4IMAS.+"]
 
 [[lean_exe]]
 name = "lean4imas-regrid"

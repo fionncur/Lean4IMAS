@@ -1,4 +1,5 @@
 import Std
+import Lean4IMAS.LinearInterpolation
 
 /- Exact affine-segment mathematics. These operations use *rational values*. -/
 namespace ProfileTransform
@@ -29,8 +30,6 @@ structure Segment where
 
 -- The local coordinate of x within an interval.
 def weight (d : Domain) (x : Rat) : Rat := (x - d.lo) / (d.hi - d.lo)
--- Linear interpolation.
-def blend (a b t : Rat) : Rat := (1 - t) * a + t * b
 
 -- Proof that local coordinate lies in [0,1] if x is in domain.
 theorem weight_range (d : Domain) (x : Rat) (hl : d.lo ≤ x) (hu : x ≤ d.hi) :

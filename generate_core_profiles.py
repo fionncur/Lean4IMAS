@@ -295,7 +295,7 @@ def main() -> None:
         args.output.write_text(lean, encoding="utf-8")
         print(f"Generated {args.output}: {fields} fields", flush=True)
         if args.check:
-            subprocess.run(["lake", "build", "Validation"], check=True)
+            subprocess.run(["lake", "build", "+Lean4IMAS.Validation"], check=True)
             subprocess.run(["lake", "env", "lean", str(args.output)], check=True)
             print("Lean type-check passed")
     except (ValueError, OSError, ET.ParseError, subprocess.CalledProcessError) as exc:
